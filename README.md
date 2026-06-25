@@ -95,6 +95,15 @@ popper.el, etc.), giving you full control over window placement:
 (setq agent-shell-manager-side nil)
 ```
 
+### Shell Ordering
+
+By default, the manager sorts by the Buffer column.  To show the most recently
+visited shell buffers first instead:
+
+```elisp
+(setq agent-shell-manager-sort-order 'recent-buffer-visit)
+```
+
 ## Status Indicators
 
 The manager displays the following status values with color coding:

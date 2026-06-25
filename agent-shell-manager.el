@@ -74,6 +74,23 @@ the manager window can also be closed by `delete-other-windows' (C-x 1)."
   :type 'boolean
   :group 'agent-shell-manager)
 
+(defcustom agent-shell-manager-sort-order nil
+  "How to sort shells in the manager.
+
+The available choices are:
+
+`default'
+    Sort by the current tabulated-list column (defaults to Buffer).
+
+`recent-buffer-visit'
+    Order shells by most recent buffer visit, most recently visited
+    first.
+
+In all cases killed buffers are shown below live buffers."
+  :type '(choice (const :tag "Default (sort by column)" nil)
+                 (const :tag "Recent buffer visit" recent-buffer-visit))
+  :group 'agent-shell-manager)
+
 (defvar agent-shell-manager-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map tabulated-list-mode-map)
@@ -124,7 +141,9 @@ Key bindings:
          ("Pending Permissions" 20 t)
          ("Path" 20 t)])
   (setq tabulated-list-padding 2)
-  (setq tabulated-list-sort-key (cons "Buffer" nil))
+  (setq tabulated-list-sort-key
+        (unless (eq agent-shell-manager-sort-order 'recent-buffer-visit)
+          (cons "Buffer" nil)))
   (tabulated-list-init-header)
 
   (when agent-shell-manager--refresh-timer
@@ -319,11 +338,21 @@ Returns a propertized string with yellow/warning face for non-zero counts."
   (with-current-buffer buffer
     default-directory))
 
+(defun agent-shell-manager--buffer-recency-index ()
+  "Return a hash table mapping buffers to their `buffer-list' positions."
+  (let ((table (make-hash-table :test 'eq))
+        (index 0))
+    (dolist (buffer (buffer-list) table)
+      (puthash buffer index table)
+      (setq index (1+ index)))))
+
 (defun agent-shell-manager--entries ()
   "Return list of entries for tabulated-list."
   (let* ((buffers (agent-shell-buffers))
          (buffers (if (listp buffers) buffers (list buffers)))
          (buffers (seq-filter #'buffer-live-p buffers))
+         (recency-index (when (eq agent-shell-manager-sort-order 'recent-buffer-visit)
+                          (agent-shell-manager--buffer-recency-index)))
          (entries (mapcar
                    (lambda (buffer)
                      (let* ((buffer-name (buffer-name buffer))
@@ -341,22 +370,28 @@ Returns a propertized string with yellow/warning face for non-zero counts."
                               perms
                               path))))
                    buffers)))
-    ;; Sort entries: killed processes go to the bottom
+    ;; Sort entries: killed processes go to the bottom.
     (sort entries
           (lambda (a b)
             (let ((status-a (aref (cadr a) 1))
-                  (status-b (aref (cadr b) 1)))
+                  (status-b (aref (cadr b) 1))
+                  (buffer-a (car a))
+                  (buffer-b (car b)))
               ;; Remove text properties to get plain status string
               (setq status-a (substring-no-properties status-a))
               (setq status-b (substring-no-properties status-b))
-              (cond
-               ;; Both killed or both not killed - maintain original order (stable)
-               ((and (string= status-a "Killed") (string= status-b "Killed")) nil)
-               ((and (not (string= status-a "Killed")) (not (string= status-b "Killed"))) nil)
-               ;; a is killed, b is not - a goes after b
-               ((string= status-a "Killed") nil)
-               ;; b is killed, a is not - a goes before b
-               (t t)))))))
+              (let ((killed-a (string= status-a "Killed"))
+                    (killed-b (string= status-b "Killed")))
+                (cond
+                 ;; Both killed or both not killed - optionally sort by recency.
+                 ((eq killed-a killed-b)
+                  (when recency-index
+                    (< (or (gethash buffer-a recency-index) most-positive-fixnum)
+                       (or (gethash buffer-b recency-index) most-positive-fixnum))))
+                 ;; a is killed, b is not - a goes after b
+                 (killed-a nil)
+                 ;; b is killed, a is not - a goes before b
+                 (t t))))))))
 
 (defun agent-shell-manager-refresh ()
   "Refresh the buffer list."
@@ -364,6 +399,10 @@ Returns a propertized string with yellow/warning face for non-zero counts."
   (when (and agent-shell-manager--global-buffer
              (buffer-live-p agent-shell-manager--global-buffer))
     (with-current-buffer agent-shell-manager--global-buffer
+      (setq tabulated-list-sort-key
+            (if (eq agent-shell-manager-sort-order 'recent-buffer-visit)
+                nil
+              (or tabulated-list-sort-key (cons "Buffer" nil))))
       (setq tabulated-list-entries (agent-shell-manager--entries))
       (tabulated-list-print t))))
 
